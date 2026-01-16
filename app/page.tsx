@@ -220,6 +220,99 @@ export default function Home() {
     ? ((workMinutes * 60 - timeLeft) / (workMinutes * 60)) * 100
     : ((breakMinutes * 60 - timeLeft) / (breakMinutes * 60)) * 100;
 
+  // Fullscreen breathing view - automatically shown when breathing is active
+  if (testBreathing || (isRunning && mode === 'break')) {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 flex items-center justify-center z-50 transition-opacity duration-1000 ease-[cubic-bezier(0.4,0,0.2,1)]">
+        <div className="relative w-full h-full flex items-center justify-center p-8">
+          {/* Close button */}
+          <button
+            onClick={() => {
+              setTestBreathing(false);
+              if (isRunning && mode === 'break') {
+                setIsRunning(false);
+              }
+            }}
+            className="absolute top-4 right-4 p-3 rounded-full bg-white dark:bg-slate-800 shadow-lg hover:shadow-xl transition-all text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white opacity-0 animate-[fadeIn_0.8s_cubic-bezier(0.4,0,0.2,1)_0.4s_forwards]"
+            aria-label="Exit breathing mode"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          
+          {/* Fullscreen breathing visualization */}
+          <div className="relative w-full max-w-2xl aspect-square opacity-0 animate-[fadeInZoom_1s_cubic-bezier(0.4,0,0.2,1)_forwards]">
+            <svg 
+              className="absolute inset-0 w-full h-full"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {/* Single path for both snake line and dot - rounded rectangle */}
+              <path
+                id="breathing-path-fullscreen"
+                d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
+                fill="none"
+                stroke="transparent"
+                pathLength="100"
+              />
+              {/* Background square track */}
+              <path
+                d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
+                fill="none"
+                stroke="#16a34a"
+                strokeWidth="4"
+                opacity="0.2"
+                pathLength="100"
+              />
+              {/* Snake line - animated */}
+              <path
+                d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
+                fill="none"
+                stroke="#22c55e"
+                strokeWidth="8"
+                strokeLinecap="round"
+                pathLength="100"
+                className="snake-line"
+              />
+              {/* Dot at the front of the snake */}
+              <circle
+                r="8"
+                fill="#22c55e"
+                className="snake-dot"
+                style={{
+                  offsetPath: 'path("M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z")',
+                }}
+              />
+            </svg>
+            {/* Phase text - centered */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <div className="text-4xl font-bold mb-2 text-green-600 dark:text-green-400">
+                  {breathingPhase === 'inhale' && 'Breathe In'}
+                  {breathingPhase === 'hold1' && 'Hold'}
+                  {breathingPhase === 'exhale' && 'Breathe Out'}
+                  {breathingPhase === 'hold2' && 'Hold'}
+                </div>
+                <div className="text-xl text-slate-500 dark:text-slate-400 mb-4">
+                  {Math.ceil(4 * (1 - breathingProgress))}s
+                </div>
+                {/* Breath counter */}
+                <div className={`text-3xl font-semibold transition-colors ${
+                  breathCount >= 10
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}>
+                  {breathCount} / 10
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4">
       <main className="w-full max-w-6xl">
@@ -423,24 +516,22 @@ export default function Home() {
             <div className={`space-y-6 flex flex-col items-center transition-opacity duration-300 ${
               (isRunning && mode === 'break') || testBreathing ? 'opacity-100' : 'opacity-30'
             }`}>
-              {/* Title aligned with Work/Break toggle */}
+              {/* Title with inline button */}
               <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl w-full max-w-sm">
                 <div className="flex-1 py-3 px-4 rounded-lg font-semibold text-center text-slate-600 dark:text-slate-400">
                   Box Breathing
                 </div>
+                <button
+                  onClick={() => setTestBreathing(!testBreathing)}
+                  className={`py-3 px-6 rounded-lg font-semibold text-sm transition-all whitespace-nowrap ${
+                    testBreathing
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-green-500 hover:bg-green-600 text-white shadow-lg hover:shadow-xl'
+                  }`}
+                >
+                  {testBreathing ? 'Stop' : 'Breathe'}
+                </button>
               </div>
-
-              {/* Test Button */}
-              <button
-                onClick={() => setTestBreathing(!testBreathing)}
-                className={`w-full max-w-sm py-2 px-4 rounded-lg font-medium text-sm transition-all ${
-                  testBreathing
-                    ? 'bg-green-600 hover:bg-green-700 text-white'
-                    : 'bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                {testBreathing ? 'Stop Test' : 'Test Breathing'}
-              </button>
 
               {/* Breathing snake animation */}
               <div className="relative w-full max-w-sm aspect-square">
