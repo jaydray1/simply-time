@@ -24,3 +24,27 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes snake-move {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes snake-dot {
+  /* The snake segment is 25 units long. The front edge is at the end of the segment. */
+  /* When stroke-dashoffset = 100: segment is at 0-25%, front is at 25% */
+  /* When stroke-dashoffset = 0: segment is at 75-100%, front is at 100% */
+  /* So front edge goes from 25% to 100% as stroke-dashoffset goes from 100 to 0 */
+  0% { offset-distance: 25%; }
+  100% { offset-distance: 125%; }
+}
+
+.snake-line {
+  stroke-dasharray: 25 75;
+  stroke-dashoffset: 100;
+  animation: snake-move 16s linear infinite;
+}
+
+.snake-dot {
+  animation: snake-dot 16s linear infinite;
+}
