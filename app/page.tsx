@@ -14,6 +14,8 @@ export default function Home() {
   const [breathingPhase, setBreathingPhase] = useState<'inhale' | 'hold1' | 'exhale' | 'hold2'>('inhale');
   const [breathingProgress, setBreathingProgress] = useState(0);
   const [testBreathing, setTestBreathing] = useState(false);
+  const [breathCount, setBreathCount] = useState(0);
+  const breathCountIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const breathingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const modeRef = useRef<TimerMode>(mode);
@@ -146,6 +148,35 @@ export default function Home() {
     return () => {
       if (breathingIntervalRef.current) {
         clearInterval(breathingIntervalRef.current);
+      }
+    };
+  }, [isRunning, mode, testBreathing]);
+
+  // Breath counter - increments every 16 seconds (one full cycle)
+  useEffect(() => {
+    if ((isRunning && mode === 'break') || testBreathing) {
+      // Reset counter when starting
+      setBreathCount(0);
+      
+      breathCountIntervalRef.current = setInterval(() => {
+        setBreathCount((prev) => {
+          if (prev < 10) {
+            return prev + 1;
+          }
+          return prev; // Stop at 10
+        });
+      }, 16000); // 16 seconds per cycle
+    } else {
+      if (breathCountIntervalRef.current) {
+        clearInterval(breathCountIntervalRef.current);
+        breathCountIntervalRef.current = null;
+      }
+      setBreathCount(0); // Reset when stopped
+    }
+
+    return () => {
+      if (breathCountIntervalRef.current) {
+        clearInterval(breathCountIntervalRef.current);
       }
     };
   }, [isRunning, mode, testBreathing]);
@@ -418,28 +449,28 @@ export default function Home() {
                   viewBox="0 0 100 100"
                   preserveAspectRatio="xMidYMid meet"
                 >
+                  {/* Single path for both snake line and dot - rounded rectangle */}
+                  <path
+                    id="breathing-path"
+                    d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
+                    fill="none"
+                    stroke="transparent"
+                    pathLength="100"
+                  />
                   {/* Background square track */}
-                  <rect
-                    x="10"
-                    y="10"
-                    width="80"
-                    height="80"
-                    rx="5"
+                  <path
+                    d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
                     fill="none"
                     stroke={isRunning && mode === 'break' || testBreathing ? '#16a34a' : '#64748b'}
                     strokeWidth="4"
                     opacity="0.2"
                     pathLength="100"
                   />
-                  {/* Snake line - animated */}
+                  {/* Snake line - animated, uses same path */}
                   {(isRunning && mode === 'break') || testBreathing ? (
                     <>
-                      <rect
-                        x="10"
-                        y="10"
-                        width="80"
-                        height="80"
-                        rx="5"
+                      <path
+                        d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
                         fill="none"
                         stroke={isRunning && mode === 'break' || testBreathing ? '#22c55e' : '#94a3b8'}
                         strokeWidth="6"
@@ -447,23 +478,19 @@ export default function Home() {
                         pathLength="100"
                         className="snake-line"
                       />
-                      {/* Dot at the front of the snake - positioned at the leading edge */}
+                      {/* Dot at the front of the snake - uses same path via offset-path */}
                       <circle
                         r="6"
                         fill={isRunning && mode === 'break' || testBreathing ? '#22c55e' : '#94a3b8'}
                         className="snake-dot"
                         style={{
-                          offsetPath: 'path("M 10,10 L 90,10 L 90,90 L 10,90 Z")',
+                          offsetPath: 'path("M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z")',
                         }}
                       />
                     </>
                   ) : (
-                    <rect
-                      x="10"
-                      y="10"
-                      width="80"
-                      height="80"
-                      rx="5"
+                    <path
+                      d="M 15,10 L 85,10 A 5,5 0 0,1 90,15 L 90,85 A 5,5 0 0,1 85,90 L 15,90 A 5,5 0 0,1 10,85 L 10,15 A 5,5 0 0,1 15,10 Z"
                       fill="none"
                       stroke="#94a3b8"
                       strokeWidth="4"
@@ -494,6 +521,16 @@ export default function Home() {
                     {((isRunning && mode === 'break') || testBreathing) && (
                       <div className="text-sm text-slate-500 dark:text-slate-400">
                         {Math.ceil(4 * (1 - breathingProgress))}s
+                      </div>
+                    )}
+                    {/* Breath counter */}
+                    {((isRunning && mode === 'break') || testBreathing) && (
+                      <div className={`mt-3 text-lg font-semibold transition-colors ${
+                        breathCount >= 10
+                          ? 'text-green-600 dark:text-green-400'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}>
+                        {breathCount} / 10
                       </div>
                     )}
                   </div>
