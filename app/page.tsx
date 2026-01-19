@@ -16,12 +16,13 @@ export default function Home() {
   const [testBreathing, setTestBreathing] = useState(false);
   const [breathCount, setBreathCount] = useState(0);
   const [isClosing, setIsClosing] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const [isEditingTime, setIsEditingTime] = useState(false);
   const [editTimeValue, setEditTimeValue] = useState('');
   const [isPulsing, setIsPulsing] = useState(false);
   const [showBreakTransition, setShowBreakTransition] = useState(false);
   const [canSkipBreak, setCanSkipBreak] = useState(false);
+  const [breathingDismissed, setBreathingDismissed] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const breathCountIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pulseIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -30,6 +31,8 @@ export default function Home() {
   const modeRef = useRef<TimerMode>(mode);
   const workMinutesRef = useRef(workMinutes);
   const breakMinutesRef = useRef(breakMinutes);
+  const workTimerSvgRef = useRef<SVGSVGElement | null>(null);
+  const breakTimerSvgRef = useRef<SVGSVGElement | null>(null);
 
   // Keep refs in sync
   useEffect(() => {
@@ -64,15 +67,17 @@ export default function Home() {
             const newMinutes = newMode === 'work' ? workMinutesRef.current : breakMinutesRef.current;
             
             // If transitioning from work to break, show the ripple transition
-            if (currentMode === 'work' && newMode === 'break') {
-              setShowBreakTransition(true);
-              // Allow skipping after 0.5s
-              setTimeout(() => setCanSkipBreak(true), 500);
-              // Complete transition after animation (1.2s) - breathing view continues
-              setTimeout(() => {
-                setShowBreakTransition(false);
-              }, 1200);
-            }
+            // Commented out - auto-opening breathing screen on break start
+            // if (currentMode === 'work' && newMode === 'break') {
+            //   setShowBreakTransition(true);
+            //   setBreathingDismissed(false); // Reset dismissed state for new break
+            //   // Allow skipping after 0.5s
+            //   setTimeout(() => setCanSkipBreak(true), 500);
+            //   // Complete transition after animation (1.2s) - breathing view continues
+            //   setTimeout(() => {
+            //     setShowBreakTransition(false);
+            //   }, 1200);
+            // }
             
             setMode(newMode);
             return newMinutes * 60;
@@ -227,12 +232,14 @@ export default function Home() {
     // Reset to work mode when stopped
     setMode('work');
     setTimeLeft(workMinutes * 60);
+    setBreathingDismissed(false); // Reset dismissed state
   };
 
   const handleReset = () => {
     setIsRunning(false);
     setMode('work');
     setTimeLeft(workMinutes * 60);
+    setBreathingDismissed(false); // Reset dismissed state
   };
 
   const handleWorkTimeChange = (minutes: number) => {
@@ -254,6 +261,14 @@ export default function Home() {
   };
 
   const handleTimeClick = () => {
+    if (!isRunning && !isEditingTime) {
+      // Toggle between work and break mode
+      const newMode = mode === 'work' ? 'break' : 'work';
+      setMode(newMode);
+    }
+  };
+
+  const handleEditTimeClick = () => {
     if (!isRunning) {
       const currentMinutes = mode === 'work' ? workMinutes : breakMinutes;
       setEditTimeValue(`${currentMinutes}:00`);
@@ -261,16 +276,6 @@ export default function Home() {
     }
   };
 
-  const handleBreakToggleClick = () => {
-    if (!isRunning) {
-      setMode('break');
-      // Small delay to ensure mode is set, then enable editing
-      setTimeout(() => {
-        setEditTimeValue(`${breakMinutes}:00`);
-        setIsEditingTime(true);
-      }, 0);
-    }
-  };
 
   const handleTimeEdit = (value: string) => {
     setEditTimeValue(value);
@@ -329,9 +334,181 @@ export default function Home() {
     }
   }, [isEditingTime]);
 
-  const progress = mode === 'work'
+  const workProgress = mode === 'work'
     ? ((workMinutes * 60 - timeLeft) / (workMinutes * 60)) * 100
-    : ((breakMinutes * 60 - timeLeft) / (breakMinutes * 60)) * 100;
+    : 0;
+  const breakProgress = mode === 'break'
+    ? ((breakMinutes * 60 - timeLeft) / (breakMinutes * 60)) * 100
+    : 0;
+
+  // Calculate angle from mouse position relative to circle center
+  const getAngleFromEvent = (e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>, svg: SVGSVGElement) => {
+    const rect = svg.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    let clientX: number;
+    let clientY: number;
+    
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    
+    const x = clientX - centerX;
+    const y = clientY - centerY;
+    
+    // Calculate angle from top (12 o'clock) going clockwise
+    // atan2(y, x) gives angle from right (3 o'clock), counter-clockwise
+    // Range: -π to π, where 0 = right, π/2 = top, -π/2 = bottom
+    
+    // Get angle from right
+    let angle = Math.atan2(y, x);
+    
+    // Normalize to 0-2π (0 = right, π/2 = top, π = left, 3π/2 = bottom)
+    if (angle < 0) {
+      angle = angle + 2 * Math.PI;
+    }
+    
+    // Rotate so 0 is at top: subtract π/2
+    // After: 0 = top, π/2 = left, π = bottom, 3π/2 = right
+    angle = angle - Math.PI / 2;
+    if (angle < 0) {
+      angle = angle + 2 * Math.PI;
+    }
+    
+    // Flip to go clockwise instead of counter-clockwise
+    // After: 0 = top, π/2 = right, π = bottom, 3π/2 = left (clockwise from top)
+    angle = 2 * Math.PI - angle;
+    if (angle >= 2 * Math.PI) {
+      angle = angle - 2 * Math.PI;
+    }
+    if (angle < 0) {
+      angle = angle + 2 * Math.PI;
+    }
+    
+    return angle;
+  };
+
+  // Convert angle to time based on current mode
+  const angleToTime = (angle: number, currentMode: TimerMode) => {
+    // Convert angle (0-2π) to progress (0-1)
+    const progress = angle / (2 * Math.PI);
+    const totalMinutes = currentMode === 'work' ? workMinutes : breakMinutes;
+    const totalSeconds = totalMinutes * 60;
+    const newTimeLeft = Math.round(totalSeconds * (1 - progress));
+    return Math.max(0, Math.min(totalSeconds, newTimeLeft));
+  };
+
+  const handleCircleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (isEditingTime) return;
+    e.preventDefault();
+    setIsDragging(true);
+    const svg = e.currentTarget;
+    const angle = getAngleFromEvent(e, svg);
+    const newTime = angleToTime(angle, mode);
+    setTimeLeft(newTime);
+  };
+
+  const handleCircleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!isDragging || isEditingTime) return;
+    e.preventDefault();
+    const svg = e.currentTarget;
+    const angle = getAngleFromEvent(e, svg);
+    const newTime = angleToTime(angle, mode);
+    setTimeLeft(newTime);
+  };
+
+  const handleCircleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleCircleTouchStart = (e: React.TouchEvent<SVGSVGElement>) => {
+    if (isEditingTime) return;
+    e.preventDefault();
+    setIsDragging(true);
+    const svg = e.currentTarget;
+    const angle = getAngleFromEvent(e, svg);
+    const newTime = angleToTime(angle, mode);
+    setTimeLeft(newTime);
+  };
+
+  const handleCircleTouchMove = (e: React.TouchEvent<SVGSVGElement>) => {
+    if (!isDragging || isEditingTime) return;
+    e.preventDefault();
+    const svg = e.currentTarget;
+    const angle = getAngleFromEvent(e, svg);
+    const newTime = angleToTime(angle, mode);
+    setTimeLeft(newTime);
+  };
+
+  const handleCircleTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+  // Global mouse/touch handlers for dragging outside the circle
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (isEditingTime) {
+        setIsDragging(false);
+        return;
+      }
+      const currentMode = modeRef.current;
+      const svg = currentMode === 'work' ? workTimerSvgRef.current : breakTimerSvgRef.current;
+      if (!svg) return;
+      
+      const rect = svg.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const x = e.clientX - centerX;
+      const y = e.clientY - centerY;
+      let angle = Math.atan2(y, x);
+      angle = (angle + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI);
+      const newTime = angleToTime(angle, currentMode);
+      setTimeLeft(newTime);
+    };
+
+    const handleGlobalTouchMove = (e: TouchEvent) => {
+      if (isEditingTime) {
+        setIsDragging(false);
+        return;
+      }
+      const currentMode = modeRef.current;
+      const svg = currentMode === 'work' ? workTimerSvgRef.current : breakTimerSvgRef.current;
+      if (!svg) return;
+      
+      const rect = svg.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const x = e.touches[0].clientX - centerX;
+      const y = e.touches[0].clientY - centerY;
+      let angle = Math.atan2(y, x);
+      angle = (angle + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI);
+      const newTime = angleToTime(angle, currentMode);
+      setTimeLeft(newTime);
+    };
+
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('touchmove', handleGlobalTouchMove, { passive: false });
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    window.addEventListener('touchend', handleGlobalMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('touchmove', handleGlobalTouchMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.removeEventListener('touchend', handleGlobalMouseUp);
+    };
+  }, [isDragging, isEditingTime]);
 
   const handleCloseFocus = () => {
     setIsClosing(true);
@@ -339,9 +516,12 @@ export default function Home() {
     // Wait for animation to complete before actually closing
     setTimeout(() => {
       setTestBreathing(false);
+      // Mark breathing as dismissed so it doesn't reopen during this break
       if (isRunning && mode === 'break') {
-        setIsRunning(false);
+        setBreathingDismissed(true);
       }
+      // Don't stop the timer - just close the breathing view
+      // The break timer will continue running in the background
       setIsClosing(false);
     }, 1000); // Match the animation duration
   };
@@ -359,7 +539,10 @@ export default function Home() {
   };
 
   // Fullscreen breathing view - automatically shown when breathing is active
-  if (testBreathing || (isRunning && mode === 'break') || showBreakTransition) {
+  // Don't show if user has dismissed it for the current break session
+  // Commented out auto-opening on break: (isRunning && mode === 'break' && !breathingDismissed)
+  // Commented out showBreakTransition - no auto-opening on break start
+  if (testBreathing) {
     return (
       <div className={`fixed inset-0 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 flex items-center justify-center z-50 ${
         isClosing 
@@ -515,7 +698,7 @@ export default function Home() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
       {/* Settings Sidebar */}
       <div className={`fixed left-0 top-0 h-full bg-white dark:bg-slate-800 shadow-2xl z-40 transition-transform duration-300 ease-in-out ${
         showSettings ? 'translate-x-0' : '-translate-x-full'
@@ -644,10 +827,11 @@ export default function Home() {
         />
       )}
 
-      <main className={`w-full max-w-4xl transition-all duration-300 ${showSettings && !isRunning ? 'lg:ml-80' : ''}`}>
-        <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl p-8 relative">
+      <main className={`w-full transition-all duration-300 ${showSettings && !isRunning ? 'lg:ml-80' : ''}`}>
+        <div className="relative p-8">
           {/* Breathe Pill Button - Top Right */}
-          {!testBreathing && !(isRunning && mode === 'break') && (
+          {/* Removed from UI - keeping code for future use */}
+          {/* {!testBreathing && !(isRunning && mode === 'break') && (
             <button
               onClick={handleBreatheClick}
               className="fixed top-6 right-6 z-30 flex items-center gap-2 px-4 py-2.5 rounded-full bg-green-500/20 dark:bg-green-500/30 backdrop-blur-sm border border-green-500/30 text-green-700 dark:text-green-400 hover:bg-green-500/30 dark:hover:bg-green-500/40 transition-all shadow-lg hover:shadow-xl"
@@ -662,110 +846,31 @@ export default function Home() {
               </svg>
               <span className="text-sm font-medium">Breathe</span>
             </button>
-          )}
-          {/* Header */}
-          <div className={`text-center mb-8 transition-all duration-300 ${
-            isRunning ? 'opacity-0 max-h-0 overflow-hidden mb-0' : 'opacity-100 max-h-96 mb-8'
-          }`}>
-            <div className="flex items-center justify-center gap-3 mb-2">
-              <h1 className="text-4xl font-bold text-slate-900 dark:text-white">
-                Simply Time
-              </h1>
-              <button
-                onClick={() => setShowInfo(!showInfo)}
-                className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
-                aria-label={showInfo ? "Hide information" : "Show information"}
-                title={showInfo ? "Hide information" : "Show information"}
-              >
-                <svg 
-                  className={`w-5 h-5 transition-transform duration-300 ${showInfo ? 'rotate-180' : ''}`}
-                  fill="none" 
-                  stroke="currentColor" 
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </button>
-            </div>
-            <p className="text-slate-600 dark:text-slate-400 mb-4">
-              Focus on what matters
-            </p>
-            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showInfo ? 'max-h-96 opacity-100 mb-4' : 'max-h-0 opacity-0 mb-0'
-            }`}>
-              <p className="text-base text-slate-700 dark:text-slate-300 max-w-2xl mx-auto mb-4">
-                <strong>How it works:</strong> Set your work and break times, then click Start. The timer will automatically cycle between work and break sessions until you click Stop.
-              </p>
-              <div className="bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 rounded-lg p-3 max-w-2xl mx-auto">
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  💡 Default times based on productivity research: A <a href="https://time.com/3518053/perfect-break/" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-900 dark:hover:text-slate-200">DeskTime study</a> found that the most productive people work in 52-minute bursts followed by 17-minute breaks. This ratio has been cited in <a href="https://hbr.org/" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-900 dark:hover:text-slate-200">Harvard Business Review</a> and <a href="https://time.com/3518053/perfect-break/" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-900 dark:hover:text-slate-200">Time magazine</a>.
-                </p>
-              </div>
-            </div>
-          </div>
-
+          )} */}
           {/* Centered Timer Layout */}
           <div className="flex flex-col items-center space-y-6">
-            {/* Settings and Info buttons row */}
-            <div className="flex items-center gap-4 w-full justify-center">
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className={`p-3 rounded-full transition-all ${
-                  isRunning 
-                    ? 'opacity-0 pointer-events-none' 
-                    : 'opacity-100 hover:bg-slate-100 dark:hover:bg-slate-700'
-                } text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300`}
-                aria-label="Open settings"
-                title="Settings"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Current Mode Indicator */}
-            <div className={`flex gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl w-full max-w-sm transition-opacity duration-300 ${
-              isRunning ? 'opacity-0' : 'opacity-100'
-            }`}>
-              <div 
-                onClick={() => {
-                  if (!isRunning) {
-                    setMode('work');
-                    setTimeout(() => {
-                      setEditTimeValue(`${workMinutes}:00`);
-                      setIsEditingTime(true);
-                    }, 0);
-                  }
-                }}
-                className={`flex-1 py-3 px-4 rounded-lg font-semibold text-center transition-all ${
-                  mode === 'work'
-                    ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-slate-600 dark:text-slate-400'
-                } ${!isRunning ? 'cursor-pointer hover:opacity-80 active:scale-95' : 'cursor-default'}`}
-                title={!isRunning ? 'Click to edit work time' : ''}
-              >
-                {mode === 'work' ? '⏱️ Work Time' : 'Work'}
-              </div>
-              <div 
-                onClick={handleBreakToggleClick}
-                className={`flex-1 py-3 px-4 rounded-lg font-semibold text-center transition-all ${
-                  mode === 'break'
-                    ? 'bg-green-600 text-white shadow-md'
-                    : 'text-slate-600 dark:text-slate-400'
-                } ${!isRunning ? 'cursor-pointer hover:opacity-80 active:scale-95' : 'cursor-default'}`}
-                title={!isRunning ? 'Click to edit break time' : ''}
-              >
-                {mode === 'break' ? '☕ Break Time' : 'Break'}
-              </div>
-            </div>
-
-            {/* Timer Display */}
-            <div className="relative w-full max-w-md">
-              <div className="aspect-square">
+            {/* Timer Display with Bubbles */}
+            <div className="relative w-full max-w-md aspect-square">
+              {/* Main Timer (Large) */}
+              <div className={`absolute inset-0 aspect-square transition-opacity duration-[3000ms] ease-in-out ${
+                mode === 'work' ? 'opacity-100 delay-[3100ms]' : 'opacity-0 pointer-events-none delay-0'
+              }`}>
                 {/* Progress Circle */}
-                <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                <svg 
+                  ref={workTimerSvgRef}
+                  className="w-full h-full transform -rotate-90"
+                  style={{
+                    cursor: !isEditingTime ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                  }}
+                  viewBox="0 0 100 100"
+                  onMouseDown={handleCircleMouseDown}
+                  onMouseMove={handleCircleMouseMove}
+                  onMouseUp={handleCircleMouseUp}
+                  onMouseLeave={handleCircleMouseUp}
+                  onTouchStart={handleCircleTouchStart}
+                  onTouchMove={handleCircleTouchMove}
+                  onTouchEnd={handleCircleTouchEnd}
+                >
                   <circle
                     cx="50"
                     cy="50"
@@ -774,6 +879,7 @@ export default function Home() {
                     strokeWidth="8"
                     fill="none"
                     className="text-slate-200 dark:text-slate-700"
+                    style={{ pointerEvents: 'none' }}
                   />
                   <circle
                     cx="50"
@@ -783,17 +889,28 @@ export default function Home() {
                     strokeWidth="8"
                     fill="none"
                     strokeDasharray={`${2 * Math.PI * 45}`}
-                    strokeDashoffset={`${2 * Math.PI * 45 * (1 - progress / 100)}`}
-                    className={`transition-all duration-1000 ${
-                      mode === 'work' ? 'text-blue-600' : 'text-green-600'
-                    }`}
+                    strokeDashoffset={`${2 * Math.PI * 45 * (1 - workProgress / 100)}`}
+                    className={`text-blue-600 ${isDragging ? '' : 'transition-all duration-1000'}`}
                     strokeLinecap="round"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  {/* Invisible circle for dragging - covers entire viewBox */}
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="50"
+                    fill="transparent"
+                    stroke="none"
+                    style={{ 
+                      pointerEvents: !isEditingTime ? 'all' : 'none',
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                    }}
                   />
                 </svg>
                 {/* Time Display */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center w-full px-4">
-                    {isEditingTime && !isRunning ? (
+                <div className={`absolute inset-0 flex items-center justify-center ${!isRunning && !isEditingTime ? 'pointer-events-none' : ''}`}>
+                  <div className={`text-center w-full px-4 ${!isRunning && !isEditingTime ? 'pointer-events-auto' : ''}`}>
+                    {isEditingTime && !isRunning && mode === 'work' ? (
                       <input
                         ref={editInputRef}
                         type="text"
@@ -812,18 +929,184 @@ export default function Home() {
                       />
                     ) : (
                       <div
-                        onClick={handleTimeClick}
-                        className={`text-7xl lg:text-8xl font-bold font-mono cursor-pointer transition-all ${
-                          mode === 'work' ? 'text-blue-600' : 'text-green-600'
-                        } ${!isRunning ? 'hover:opacity-80 active:scale-95' : 'cursor-default'}`}
-                        title={!isRunning ? 'Click to edit time' : ''}
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            handleTimeClick();
+                          }
+                        }}
+                        className={`text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-light tracking-tight transition-all font-[var(--font-inter)] mx-auto text-blue-600 ${
+                          !isRunning && !isDragging ? 'cursor-pointer' : 'cursor-default'
+                        }`}
+                        style={{
+                          fontVariationSettings: '"wght" 300, "slnt" 0',
+                          maxWidth: '85%',
+                          userSelect: isDragging ? 'none' : 'auto',
+                        }}
+                        title={!isRunning ? 'Click to toggle between work and break mode' : ''}
                       >
-                        {formatTime(timeLeft)}
+                        {timeLeft === 0 && !isRunning && mode === 'work' ? 'Simply Time' : formatTime(timeLeft)}
                       </div>
                     )}
-                    <div className="text-sm text-slate-500 dark:text-slate-400 mt-2 uppercase tracking-wide">
-                      {mode === 'work' ? 'Focus Time' : 'Break Time'}
+                    <div className="flex items-center justify-center gap-2 mt-2">
+                      <div className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                        ⏱️ Focus Time
+                      </div>
+                      {!isRunning && !isEditingTime && mode === 'work' && (
+                        <button
+                          onClick={handleEditTimeClick}
+                          className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-all"
+                          title="Edit time"
+                          aria-label="Edit time"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Break Timer (Large) */}
+              <div className={`absolute inset-0 aspect-square transition-opacity duration-[3000ms] ease-in-out ${
+                mode === 'break' ? 'opacity-100 delay-[3100ms]' : 'opacity-0 pointer-events-none delay-0'
+              }`}>
+                {/* Progress Circle */}
+                <svg 
+                  ref={breakTimerSvgRef}
+                  className="w-full h-full transform -rotate-90"
+                  style={{
+                    cursor: !isEditingTime ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                  }}
+                  viewBox="0 0 100 100"
+                  onMouseDown={handleCircleMouseDown}
+                  onMouseMove={handleCircleMouseMove}
+                  onMouseUp={handleCircleMouseUp}
+                  onMouseLeave={handleCircleMouseUp}
+                  onTouchStart={handleCircleTouchStart}
+                  onTouchMove={handleCircleTouchMove}
+                  onTouchEnd={handleCircleTouchEnd}
+                >
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="45"
+                    stroke="currentColor"
+                    strokeWidth="8"
+                    fill="none"
+                    className="text-slate-200 dark:text-slate-700"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="45"
+                    stroke="currentColor"
+                    strokeWidth="8"
+                    fill="none"
+                    strokeDasharray={`${2 * Math.PI * 45}`}
+                    strokeDashoffset={`${2 * Math.PI * 45 * (1 - breakProgress / 100)}`}
+                    className={`text-green-600 ${isDragging ? '' : 'transition-all duration-1000'}`}
+                    strokeLinecap="round"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  {/* Invisible circle for dragging - covers entire viewBox */}
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="50"
+                    fill="transparent"
+                    stroke="none"
+                    style={{ 
+                      pointerEvents: !isEditingTime ? 'all' : 'none',
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                    }}
+                  />
+                </svg>
+                {/* Time Display */}
+                <div className={`absolute inset-0 flex items-center justify-center ${!isRunning && !isEditingTime ? 'pointer-events-none' : ''}`}>
+                  <div className={`text-center w-full px-4 ${!isRunning && !isEditingTime ? 'pointer-events-auto' : ''}`}>
+                    {isEditingTime && !isRunning && mode === 'break' ? (
+                      <input
+                        ref={editInputRef}
+                        type="text"
+                        value={editTimeValue}
+                        onChange={(e) => handleTimeEdit(e.target.value)}
+                        onBlur={handleTimeSave}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleTimeSave();
+                          } else if (e.key === 'Escape') {
+                            handleTimeCancel();
+                          }
+                        }}
+                        className="w-full text-6xl lg:text-7xl font-bold font-mono text-center bg-transparent border-2 border-green-500 dark:border-green-400 rounded-lg py-2 focus:outline-none focus:ring-2 focus:ring-green-500 dark:focus:ring-green-400"
+                        placeholder="17:00"
+                      />
+                    ) : (
+                      <div
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            handleTimeClick();
+                          }
+                        }}
+                        className={`text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-light tracking-tight transition-all font-[var(--font-inter)] mx-auto text-green-600 ${
+                          !isRunning && !isDragging ? 'cursor-pointer' : 'cursor-default'
+                        }`}
+                        style={{
+                          fontVariationSettings: '"wght" 300, "slnt" 0',
+                          maxWidth: '85%',
+                          userSelect: isDragging ? 'none' : 'auto',
+                        }}
+                        title={!isRunning ? 'Click to toggle between work and break mode' : ''}
+                      >
+                        {timeLeft === 0 && !isRunning && mode === 'break' ? 'Simply Time' : formatTime(timeLeft)}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-center gap-2 mt-2">
+                      <div className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                        ☕ Break Time
+                      </div>
+                      {!isRunning && !isEditingTime && mode === 'break' && (
+                        <button
+                          onClick={handleEditTimeClick}
+                          className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-all"
+                          title="Edit time"
+                          aria-label="Edit time"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Work Bubble (Small) - Bottom Right */}
+              <div className={`absolute bottom-0 right-0 transition-opacity duration-[3000ms] ease-in-out ${
+                mode === 'work' 
+                  ? 'opacity-0 pointer-events-none delay-0' 
+                  : 'opacity-100 delay-[3100ms] w-20 h-20 -mb-4 -mr-4'
+              }`}>
+                <div className="w-full h-full rounded-full bg-blue-500/20 dark:bg-blue-500/30 border-2 border-blue-500/50 dark:border-blue-500/50 flex items-center justify-center backdrop-blur-sm shadow-lg">
+                  <div className="text-2xl font-light text-blue-600 dark:text-blue-400 font-[var(--font-inter)]">
+                    {workMinutes}
+                  </div>
+                </div>
+              </div>
+
+              {/* Break Bubble (Small) - Bottom Right */}
+              <div className={`absolute bottom-0 right-0 transition-opacity duration-[3000ms] ease-in-out ${
+                mode === 'break' 
+                  ? 'opacity-0 pointer-events-none delay-0' 
+                  : 'opacity-100 delay-[3100ms] w-20 h-20 -mb-4 -mr-4'
+              }`}>
+                <div className="w-full h-full rounded-full bg-green-500/20 dark:bg-green-500/30 border-2 border-green-500/50 dark:border-green-500/50 flex items-center justify-center backdrop-blur-sm shadow-lg">
+                  <div className="text-2xl font-light text-green-600 dark:text-green-400 font-[var(--font-inter)]">
+                    {breakMinutes}
                   </div>
                 </div>
               </div>
