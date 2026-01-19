@@ -8,7 +8,7 @@ export default function Home() {
   const [workMinutes, setWorkMinutes] = useState(52);
   const [breakMinutes, setBreakMinutes] = useState(17);
   const [mode, setMode] = useState<TimerMode>('work');
-  const [timeLeft, setTimeLeft] = useState(52 * 60); // in seconds
+  const [timeLeft, setTimeLeft] = useState(5); // Start with 5 second initialization
   const [isRunning, setIsRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<'inhale' | 'hold1' | 'exhale' | 'hold2'>('inhale');
@@ -23,6 +23,9 @@ export default function Home() {
   const [canSkipBreak, setCanSkipBreak] = useState(false);
   const [breathingDismissed, setBreathingDismissed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [hasInitialized, setHasInitialized] = useState(false);
+  const [showAudioPrompt, setShowAudioPrompt] = useState(true);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const breathCountIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pulseIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -33,6 +36,10 @@ export default function Home() {
   const breakMinutesRef = useRef(breakMinutes);
   const workTimerSvgRef = useRef<SVGSVGElement | null>(null);
   const breakTimerSvgRef = useRef<SVGSVGElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioEnabledRef = useRef(false);
+  const backgroundNoiseRef = useRef<AudioBufferSourceNode | null>(null);
+  const backgroundNoiseGainRef = useRef<GainNode | null>(null);
 
   // Keep refs in sync
   useEffect(() => {
@@ -47,13 +54,22 @@ export default function Home() {
     breakMinutesRef.current = breakMinutes;
   }, [breakMinutes]);
 
-  // Initialize time left based on current mode
+  // Auto-start initialization timer on page load
   useEffect(() => {
-    if (!isRunning) {
+    setIsRunning(true);
+    setIsInitializing(true);
+  }, []);
+
+  // Initialize time left based on current mode (only when not initializing)
+  useEffect(() => {
+    if (!isRunning && !isInitializing && hasInitialized) {
       const minutes = mode === 'work' ? workMinutes : breakMinutes;
       setTimeLeft(minutes * 60);
     }
-  }, [mode, workMinutes, breakMinutes, isRunning]);
+    if (!hasInitialized) {
+      setHasInitialized(true);
+    }
+  }, [mode, workMinutes, breakMinutes, isRunning, isInitializing, hasInitialized]);
 
   // Timer countdown logic
   useEffect(() => {
@@ -61,10 +77,36 @@ export default function Home() {
       intervalRef.current = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
-            // Auto-switch mode and continue running
+            // Handle initialization completion
+            if (isInitializing) {
+              setIsInitializing(false);
+              // Transition to actual work time
+              const workSeconds = workMinutesRef.current * 60;
+              setMode('work');
+              // Play work start sound when transitioning from initialization to work
+              // Use setTimeout to ensure state updates complete first
+              setTimeout(() => {
+                playWorkStartSound().catch(console.error);
+                startBackgroundNoise(); // Start the audio bridge
+              }, 100);
+              return workSeconds;
+            }
+            
+            // Auto-switch mode and continue running (normal work/break cycle)
             const currentMode = modeRef.current;
             const newMode = currentMode === 'work' ? 'break' : 'work';
             const newMinutes = newMode === 'work' ? workMinutesRef.current : breakMinutesRef.current;
+            
+            // Play sounds on transitions (only after initialization)
+            if (currentMode === 'work' && newMode === 'break') {
+              // Tibetan singing bowl sound when work time ends
+              stopBackgroundNoise(); // Stop background noise when work ends
+              playTibetanBowlSound().catch(console.error);
+            } else if (currentMode === 'break' && newMode === 'work') {
+              // Different sound when work time starts
+              playWorkStartSound().catch(console.error);
+              startBackgroundNoise(); // Start the audio bridge
+            }
             
             // If transitioning from work to break, show the ripple transition
             // Commented out - auto-opening breathing screen on break start
@@ -97,7 +139,262 @@ export default function Home() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [isRunning]);
+  }, [isRunning, isInitializing]);
+
+  // Initialize audio context
+  useEffect(() => {
+    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Resume audio context on user interaction (required by browsers)
+    const resumeAudio = async () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        try {
+          await audioContextRef.current.resume();
+          audioEnabledRef.current = true;
+          setShowAudioPrompt(false); // Hide prompt once audio is enabled
+          console.log('Audio context resumed and enabled');
+        } catch (error) {
+          console.error('Error resuming audio context:', error);
+        }
+      } else if (audioContextRef.current && audioContextRef.current.state === 'running') {
+        audioEnabledRef.current = true;
+        setShowAudioPrompt(false);
+      }
+    };
+    
+    // Try to resume on any user interaction - keep trying until it works
+    const handleInteraction = () => {
+      resumeAudio();
+    };
+    
+    document.addEventListener('click', handleInteraction);
+    document.addEventListener('touchstart', handleInteraction);
+    document.addEventListener('keydown', handleInteraction);
+    
+    return () => {
+      document.removeEventListener('click', handleInteraction);
+      document.removeEventListener('touchstart', handleInteraction);
+      document.removeEventListener('keydown', handleInteraction);
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  // Play Tibetan singing bowl sound
+  const playTibetanBowlSound = async () => {
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const audioContext = audioContextRef.current;
+      
+      // Resume audio context if suspended (required by browsers)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+        audioEnabledRef.current = true;
+        console.log('Audio context resumed for Tibetan bowl');
+      }
+      
+      // Only play if audio is enabled
+      if (!audioEnabledRef.current) {
+        console.log('Audio not enabled yet, skipping Tibetan bowl sound');
+        return;
+      }
+      
+      console.log('Playing Tibetan bowl sound, context state:', audioContext.state);
+    
+    // Create oscillator for Tibetan bowl sound
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    // Tibetan bowl characteristics: low frequency, long decay
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(220, audioContext.currentTime); // A3 note
+    
+    // Envelope: quick attack, long decay
+    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.1);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 3);
+    
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 3);
+    
+    // Add a second harmonic for richer sound
+    const oscillator2 = audioContext.createOscillator();
+    const gainNode2 = audioContext.createGain();
+    oscillator2.connect(gainNode2);
+    gainNode2.connect(audioContext.destination);
+    
+    oscillator2.type = 'sine';
+    oscillator2.frequency.setValueAtTime(440, audioContext.currentTime); // A4 (octave)
+    
+    gainNode2.gain.setValueAtTime(0, audioContext.currentTime);
+    gainNode2.gain.linearRampToValueAtTime(0.15, audioContext.currentTime + 0.1);
+    gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 3);
+    
+    oscillator2.start(audioContext.currentTime);
+    oscillator2.stop(audioContext.currentTime + 3);
+    } catch (error) {
+      console.error('Error playing Tibetan bowl sound:', error);
+    }
+  };
+
+  // Play work start sound (1.5-second ascending sine swell, 440Hz peak, 200ms attack)
+  const playWorkStartSound = async () => {
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const audioContext = audioContextRef.current;
+      
+      // Resume audio context if suspended (required by browsers)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+        audioEnabledRef.current = true;
+        console.log('Audio context resumed for work start');
+      }
+      
+      // Only play if audio is enabled
+      if (!audioEnabledRef.current) {
+        console.log('Audio not enabled yet, skipping work start sound');
+        return;
+      }
+      
+      console.log('Playing work start sound, context state:', audioContext.state);
+    
+      // Create oscillator for work start sound - ascending sine swell
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      // Standard A (440Hz) peak, ascending from lower frequency for warmth
+      oscillator.type = 'sine';
+      const startFreq = 330; // Start lower for warmth
+      const peakFreq = 440; // Standard A
+      const duration = 1.5; // 1.5 seconds
+      const attackTime = 0.2; // 200ms attack
+      
+      // Frequency sweep: ascend from 330Hz to 440Hz
+      oscillator.frequency.setValueAtTime(startFreq, audioContext.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(peakFreq, audioContext.currentTime + duration);
+      
+      // Gain envelope: 200ms attack, then sustain and fade
+      gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.25, audioContext.currentTime + attackTime); // Gentle attack
+      gainNode.gain.setValueAtTime(0.25, audioContext.currentTime + attackTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.15, audioContext.currentTime + duration * 0.7); // Slight sustain
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration); // Gentle fade out
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + duration);
+      
+      // Add subtle harmonics for "organic digital" warmth (not tinny)
+      const harmonic2 = audioContext.createOscillator();
+      const gain2 = audioContext.createGain();
+      harmonic2.connect(gain2);
+      gain2.connect(audioContext.destination);
+      
+      harmonic2.type = 'sine';
+      harmonic2.frequency.setValueAtTime(startFreq * 2, audioContext.currentTime);
+      harmonic2.frequency.exponentialRampToValueAtTime(peakFreq * 2, audioContext.currentTime + duration);
+      
+      gain2.gain.setValueAtTime(0, audioContext.currentTime);
+      gain2.gain.linearRampToValueAtTime(0.08, audioContext.currentTime + attackTime);
+      gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+      
+      harmonic2.start(audioContext.currentTime);
+      harmonic2.stop(audioContext.currentTime + duration);
+      
+    } catch (error) {
+      console.error('Error playing work start sound:', error);
+    }
+  };
+
+  // Generate pink noise (for audio bridge)
+  const generatePinkNoise = (audioContext: AudioContext, duration: number): AudioBuffer => {
+    const sampleRate = audioContext.sampleRate;
+    const buffer = audioContext.createBuffer(1, sampleRate * duration, sampleRate);
+    const data = buffer.getChannelData(0);
+    
+    // Pink noise generation (simplified)
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < data.length; i++) {
+      const white = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.96900 * b2 + white * 0.1538520;
+      b3 = 0.86650 * b3 + white * 0.3104856;
+      b4 = 0.55000 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.0168980;
+      data[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+      data[i] *= 0.11; // Normalize
+      b6 = white * 0.115926;
+    }
+    
+    return buffer;
+  };
+
+  // Start background noise (audio bridge) for first 60 seconds of work
+  const startBackgroundNoise = async () => {
+    try {
+      if (!audioEnabledRef.current || !audioContextRef.current) return;
+      
+      // Stop any existing background noise
+      stopBackgroundNoise();
+      
+      const audioContext = audioContextRef.current;
+      const duration = 60; // 60 seconds
+      
+      // Generate pink noise buffer
+      const noiseBuffer = generatePinkNoise(audioContext, duration);
+      
+      // Create source and gain nodes
+      const source = audioContext.createBufferSource();
+      const gainNode = audioContext.createGain();
+      
+      source.buffer = noiseBuffer;
+      source.loop = false;
+      
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      // Set volume to 5% (0.05)
+      gainNode.gain.setValueAtTime(0.05, audioContext.currentTime);
+      
+      // Store refs for cleanup
+      backgroundNoiseRef.current = source;
+      backgroundNoiseGainRef.current = gainNode;
+      
+      source.start(audioContext.currentTime);
+      source.onended = () => {
+        backgroundNoiseRef.current = null;
+        backgroundNoiseGainRef.current = null;
+      };
+      
+      console.log('Background noise (audio bridge) started');
+    } catch (error) {
+      console.error('Error starting background noise:', error);
+    }
+  };
+
+  // Stop background noise
+  const stopBackgroundNoise = () => {
+    if (backgroundNoiseRef.current) {
+      try {
+        backgroundNoiseRef.current.stop();
+      } catch (e) {
+        // Already stopped
+      }
+      backgroundNoiseRef.current = null;
+    }
+    backgroundNoiseGainRef.current = null;
+  };
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -229,6 +526,7 @@ export default function Home() {
 
   const handleStop = () => {
     setIsRunning(false);
+    stopBackgroundNoise(); // Stop background noise when stopped
     // Reset to work mode when stopped
     setMode('work');
     setTimeLeft(workMinutes * 60);
@@ -237,6 +535,7 @@ export default function Home() {
 
   const handleReset = () => {
     setIsRunning(false);
+    stopBackgroundNoise(); // Stop background noise when reset
     setMode('work');
     setTimeLeft(workMinutes * 60);
     setBreathingDismissed(false); // Reset dismissed state
@@ -334,10 +633,13 @@ export default function Home() {
     }
   }, [isEditingTime]);
 
-  const workProgress = mode === 'work'
+  // Calculate progress - use initialization progress if initializing, otherwise normal progress
+  const workProgress = isInitializing
+    ? ((5 - timeLeft) / 5) * 100
+    : mode === 'work' && workMinutes > 0
     ? ((workMinutes * 60 - timeLeft) / (workMinutes * 60)) * 100
     : 0;
-  const breakProgress = mode === 'break'
+  const breakProgress = mode === 'break' && breakMinutes > 0 && !isInitializing
     ? ((breakMinutes * 60 - timeLeft) / (breakMinutes * 60)) * 100
     : 0;
 
@@ -399,25 +701,29 @@ export default function Home() {
     const progress = angle / (2 * Math.PI);
     const totalMinutes = currentMode === 'work' ? workMinutes : breakMinutes;
     const totalSeconds = totalMinutes * 60;
+    // Ensure we have valid values
+    if (totalSeconds <= 0) return 0;
     const newTimeLeft = Math.round(totalSeconds * (1 - progress));
     return Math.max(0, Math.min(totalSeconds, newTimeLeft));
   };
 
-  const handleCircleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handleCircleMouseDown = (e: React.MouseEvent<SVGCircleElement>) => {
     if (isEditingTime) return;
     e.preventDefault();
     setIsDragging(true);
-    const svg = e.currentTarget;
-    const angle = getAngleFromEvent(e, svg);
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const angle = getAngleFromEvent(e as any, svg);
     const newTime = angleToTime(angle, mode);
     setTimeLeft(newTime);
   };
 
-  const handleCircleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handleCircleMouseMove = (e: React.MouseEvent<SVGCircleElement>) => {
     if (!isDragging || isEditingTime) return;
     e.preventDefault();
-    const svg = e.currentTarget;
-    const angle = getAngleFromEvent(e, svg);
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const angle = getAngleFromEvent(e as any, svg);
     const newTime = angleToTime(angle, mode);
     setTimeLeft(newTime);
   };
@@ -426,21 +732,23 @@ export default function Home() {
     setIsDragging(false);
   };
 
-  const handleCircleTouchStart = (e: React.TouchEvent<SVGSVGElement>) => {
+  const handleCircleTouchStart = (e: React.TouchEvent<SVGCircleElement>) => {
     if (isEditingTime) return;
     e.preventDefault();
     setIsDragging(true);
-    const svg = e.currentTarget;
-    const angle = getAngleFromEvent(e, svg);
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const angle = getAngleFromEvent(e as any, svg);
     const newTime = angleToTime(angle, mode);
     setTimeLeft(newTime);
   };
 
-  const handleCircleTouchMove = (e: React.TouchEvent<SVGSVGElement>) => {
+  const handleCircleTouchMove = (e: React.TouchEvent<SVGCircleElement>) => {
     if (!isDragging || isEditingTime) return;
     e.preventDefault();
-    const svg = e.currentTarget;
-    const angle = getAngleFromEvent(e, svg);
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const angle = getAngleFromEvent(e as any, svg);
     const newTime = angleToTime(angle, mode);
     setTimeLeft(newTime);
   };
@@ -829,6 +1137,36 @@ export default function Home() {
 
       <main className={`w-full transition-all duration-300 ${showSettings && !isRunning ? 'lg:ml-80' : ''}`}>
         <div className="relative p-8">
+          {/* Audio Enable Prompt */}
+          {showAudioPrompt && !audioEnabledRef.current && (
+            <div className="fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-8 max-w-sm mx-4 shadow-2xl text-center">
+                <div className="text-4xl mb-4">🔔</div>
+                <h3 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
+                  Enable Sounds
+                </h3>
+                <p className="text-slate-600 dark:text-slate-400 mb-2">
+                  Click anywhere to enable timer sounds
+                </p>
+                <p className="text-sm text-slate-500 dark:text-slate-500 mb-6">
+                  or press <kbd className="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">Space</kbd> to enable
+                </p>
+                <button
+                  onClick={() => {
+                    if (audioContextRef.current) {
+                      audioContextRef.current.resume().then(() => {
+                        audioEnabledRef.current = true;
+                        setShowAudioPrompt(false);
+                      }).catch(console.error);
+                    }
+                  }}
+                  className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all shadow-lg hover:shadow-xl"
+                >
+                  Enable Sounds
+                </button>
+              </div>
+            </div>
+          )}
           {/* Breathe Pill Button - Top Right */}
           {/* Removed from UI - keeping code for future use */}
           {/* {!testBreathing && !(isRunning && mode === 'break') && (
@@ -859,17 +1197,7 @@ export default function Home() {
                 <svg 
                   ref={workTimerSvgRef}
                   className="w-full h-full transform -rotate-90"
-                  style={{
-                    cursor: !isEditingTime ? (isDragging ? 'grabbing' : 'grab') : 'default',
-                  }}
                   viewBox="0 0 100 100"
-                  onMouseDown={handleCircleMouseDown}
-                  onMouseMove={handleCircleMouseMove}
-                  onMouseUp={handleCircleMouseUp}
-                  onMouseLeave={handleCircleMouseUp}
-                  onTouchStart={handleCircleTouchStart}
-                  onTouchMove={handleCircleTouchMove}
-                  onTouchEnd={handleCircleTouchEnd}
                 >
                   <circle
                     cx="50"
@@ -908,8 +1236,8 @@ export default function Home() {
                   />
                 </svg>
                 {/* Time Display */}
-                <div className={`absolute inset-0 flex items-center justify-center ${!isRunning && !isEditingTime ? 'pointer-events-none' : ''}`}>
-                  <div className={`text-center w-full px-4 ${!isRunning && !isEditingTime ? 'pointer-events-auto' : ''}`}>
+                <div className={`absolute inset-0 flex items-center justify-center ${!isEditingTime ? 'pointer-events-none' : ''}`}>
+                  <div className={`text-center w-full px-4 ${!isEditingTime ? 'pointer-events-auto' : ''}`}>
                     {isEditingTime && !isRunning && mode === 'work' ? (
                       <input
                         ref={editInputRef}
@@ -976,17 +1304,7 @@ export default function Home() {
                 <svg 
                   ref={breakTimerSvgRef}
                   className="w-full h-full transform -rotate-90"
-                  style={{
-                    cursor: !isEditingTime ? (isDragging ? 'grabbing' : 'grab') : 'default',
-                  }}
                   viewBox="0 0 100 100"
-                  onMouseDown={handleCircleMouseDown}
-                  onMouseMove={handleCircleMouseMove}
-                  onMouseUp={handleCircleMouseUp}
-                  onMouseLeave={handleCircleMouseUp}
-                  onTouchStart={handleCircleTouchStart}
-                  onTouchMove={handleCircleTouchMove}
-                  onTouchEnd={handleCircleTouchEnd}
                 >
                   <circle
                     cx="50"
@@ -1022,11 +1340,18 @@ export default function Home() {
                       pointerEvents: !isEditingTime ? 'all' : 'none',
                       cursor: isDragging ? 'grabbing' : 'grab',
                     }}
+                    onMouseDown={handleCircleMouseDown}
+                    onMouseMove={handleCircleMouseMove}
+                    onMouseUp={handleCircleMouseUp}
+                    onMouseLeave={handleCircleMouseUp}
+                    onTouchStart={handleCircleTouchStart}
+                    onTouchMove={handleCircleTouchMove}
+                    onTouchEnd={handleCircleTouchEnd}
                   />
                 </svg>
                 {/* Time Display */}
-                <div className={`absolute inset-0 flex items-center justify-center ${!isRunning && !isEditingTime ? 'pointer-events-none' : ''}`}>
-                  <div className={`text-center w-full px-4 ${!isRunning && !isEditingTime ? 'pointer-events-auto' : ''}`}>
+                <div className={`absolute inset-0 flex items-center justify-center ${!isEditingTime ? 'pointer-events-none' : ''}`}>
+                  <div className={`text-center w-full px-4 ${!isEditingTime ? 'pointer-events-auto' : ''}`}>
                     {isEditingTime && !isRunning && mode === 'break' ? (
                       <input
                         ref={editInputRef}
