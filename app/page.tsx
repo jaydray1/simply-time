@@ -26,6 +26,8 @@ export default function Home() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [hasInitialized, setHasInitialized] = useState(false);
   const [showAudioPrompt, setShowAudioPrompt] = useState(true);
+  const [synthWaveCountdown, setSynthWaveCountdown] = useState(0);
+  const [synthWaveActive, setSynthWaveActive] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const breathCountIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pulseIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -40,6 +42,9 @@ export default function Home() {
   const audioEnabledRef = useRef(false);
   const backgroundNoiseRef = useRef<AudioBufferSourceNode | null>(null);
   const backgroundNoiseGainRef = useRef<GainNode | null>(null);
+  const synthWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const synthWaveAnimationRef = useRef<number | null>(null);
+  const synthWaveCountdownRef = useRef<NodeJS.Timeout | null>(null);
 
   // Keep refs in sync
   useEffect(() => {
@@ -60,16 +65,21 @@ export default function Home() {
     setIsInitializing(true);
   }, []);
 
-  // Initialize time left based on current mode (only when not initializing)
+  // Initialize time left based on current mode (only when mode or duration changes, not when pausing)
   useEffect(() => {
-    if (!isRunning && !isInitializing && hasInitialized) {
+    // Only reset time when mode or duration changes, not when pausing/resuming
+    if (!isInitializing && hasInitialized) {
       const minutes = mode === 'work' ? workMinutes : breakMinutes;
-      setTimeLeft(minutes * 60);
+      // Only set if we're not running (to avoid resetting during active timer)
+      // This will reset when mode changes or duration changes while paused
+      if (!isRunning) {
+        setTimeLeft(minutes * 60);
+      }
     }
     if (!hasInitialized) {
       setHasInitialized(true);
     }
-  }, [mode, workMinutes, breakMinutes, isRunning, isInitializing, hasInitialized]);
+  }, [mode, workMinutes, breakMinutes, isInitializing, hasInitialized]); // Removed isRunning from dependencies
 
   // Timer countdown logic
   useEffect(() => {
@@ -88,6 +98,7 @@ export default function Home() {
               setTimeout(() => {
                 playWorkStartSound().catch(console.error);
                 startBackgroundNoise(); // Start the audio bridge
+                startSynthWaveCountdown(); // Start synth wave countdown
               }, 100);
               return workSeconds;
             }
@@ -101,11 +112,13 @@ export default function Home() {
             if (currentMode === 'work' && newMode === 'break') {
               // Tibetan singing bowl sound when work time ends
               stopBackgroundNoise(); // Stop background noise when work ends
+              stopSynthWaveCountdown(); // Stop synth wave when work ends
               playTibetanBowlSound().catch(console.error);
             } else if (currentMode === 'break' && newMode === 'work') {
               // Different sound when work time starts
               playWorkStartSound().catch(console.error);
               startBackgroundNoise(); // Start the audio bridge
+              startSynthWaveCountdown(); // Start synth wave countdown
             }
             
             // If transitioning from work to break, show the ripple transition
@@ -388,12 +401,173 @@ export default function Home() {
     if (backgroundNoiseRef.current) {
       try {
         backgroundNoiseRef.current.stop();
+        backgroundNoiseRef.current.disconnect();
       } catch (e) {
-        // Already stopped
+        // Already stopped or disconnected
       }
       backgroundNoiseRef.current = null;
     }
-    backgroundNoiseGainRef.current = null;
+    if (backgroundNoiseGainRef.current) {
+      try {
+        backgroundNoiseGainRef.current.disconnect();
+      } catch (e) {
+        // Already disconnected
+      }
+      backgroundNoiseGainRef.current = null;
+    }
+  };
+
+  // Synth wave visualization and countdown
+  const drawSynthWave = (ctx: CanvasRenderingContext2D, width: number, height: number, time: number) => {
+    ctx.clearRect(0, 0, width, height);
+    
+    // Gradient background
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, 'rgba(59, 130, 246, 0.1)'); // blue-500
+    gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    
+    // Draw multiple wave layers for depth
+    ctx.strokeStyle = '#3b82f6'; // blue-500
+    ctx.lineWidth = 2;
+    
+    // Main wave
+    ctx.beginPath();
+    const centerY = height / 2;
+    const amplitude = height * 0.3;
+    const frequency = 0.02;
+    
+    for (let x = 0; x < width; x++) {
+      const y = centerY + Math.sin((x * frequency) + (time * 0.1)) * amplitude;
+      if (x === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    
+    // Secondary wave (slightly offset)
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+    ctx.beginPath();
+    for (let x = 0; x < width; x++) {
+      const y = centerY + Math.sin((x * frequency * 1.5) + (time * 0.15) + Math.PI / 4) * (amplitude * 0.6);
+      if (x === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    
+    // Tertiary wave (subtle)
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
+    ctx.beginPath();
+    for (let x = 0; x < width; x++) {
+      const y = centerY + Math.sin((x * frequency * 2) + (time * 0.2) + Math.PI / 2) * (amplitude * 0.4);
+      if (x === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    
+    // Grid lines for synth aesthetic
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.1)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const y = (height / 5) * i;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+  };
+
+  const animateSynthWave = () => {
+    const canvas = synthWaveCanvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    let animationTime = 0;
+    
+    const animate = () => {
+      drawSynthWave(ctx, canvas.width, canvas.height, animationTime);
+      animationTime += 0.1;
+      synthWaveAnimationRef.current = requestAnimationFrame(animate);
+    };
+    
+    animate();
+  };
+
+  const startSynthWaveCountdown = () => {
+    // Stop any existing countdown first
+    if (synthWaveCountdownRef.current) {
+      clearInterval(synthWaveCountdownRef.current);
+      synthWaveCountdownRef.current = null;
+    }
+    
+    // Reset countdown to 60
+    setSynthWaveCountdown(60);
+    setSynthWaveActive(true);
+    
+    // Start countdown
+    synthWaveCountdownRef.current = setInterval(() => {
+      setSynthWaveCountdown((prev) => {
+        if (prev <= 1) {
+          if (synthWaveCountdownRef.current) {
+            clearInterval(synthWaveCountdownRef.current);
+            synthWaveCountdownRef.current = null;
+          }
+          setSynthWaveActive(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // Start animation when synth wave becomes active and canvas is ready
+  useEffect(() => {
+    if (synthWaveActive && synthWaveCanvasRef.current) {
+      animateSynthWave();
+    }
+    
+    return () => {
+      if (synthWaveAnimationRef.current) {
+        cancelAnimationFrame(synthWaveAnimationRef.current);
+        synthWaveAnimationRef.current = null;
+      }
+    };
+  }, [synthWaveActive]);
+
+  const stopSynthWaveCountdown = () => {
+    // Stop animation
+    if (synthWaveAnimationRef.current) {
+      cancelAnimationFrame(synthWaveAnimationRef.current);
+      synthWaveAnimationRef.current = null;
+    }
+    
+    // Stop countdown
+    if (synthWaveCountdownRef.current) {
+      clearInterval(synthWaveCountdownRef.current);
+      synthWaveCountdownRef.current = null;
+    }
+    
+    setSynthWaveActive(false);
+    
+    // Clear canvas
+    const canvas = synthWaveCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -522,20 +696,23 @@ export default function Home() {
 
   const handleStart = () => {
     setIsRunning(true);
+    // Start synth wave if in work mode
+    if (mode === 'work') {
+      startSynthWaveCountdown();
+    }
   };
 
   const handleStop = () => {
     setIsRunning(false);
-    stopBackgroundNoise(); // Stop background noise when stopped
-    // Reset to work mode when stopped
-    setMode('work');
-    setTimeLeft(workMinutes * 60);
-    setBreathingDismissed(false); // Reset dismissed state
+    stopBackgroundNoise(); // Stop background noise when paused
+    stopSynthWaveCountdown(); // Stop synth wave countdown when paused
+    // Just pause - don't reset time or mode
   };
 
   const handleReset = () => {
     setIsRunning(false);
     stopBackgroundNoise(); // Stop background noise when reset
+    stopSynthWaveCountdown(); // Stop synth wave when reset
     setMode('work');
     setTimeLeft(workMinutes * 60);
     setBreathingDismissed(false); // Reset dismissed state
@@ -560,10 +737,12 @@ export default function Home() {
   };
 
   const handleTimeClick = () => {
-    if (!isRunning && !isEditingTime) {
-      // Toggle between work and break mode
-      const newMode = mode === 'work' ? 'break' : 'work';
-      setMode(newMode);
+    if (isRunning) {
+      // Stop the timer when running
+      handleStop();
+    } else if (!isEditingTime) {
+      // Start the timer when not running
+      handleStart();
     }
   };
 
@@ -1006,7 +1185,7 @@ export default function Home() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
+    <div className="flex min-h-screen items-start justify-center pt-8 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
       {/* Settings Sidebar */}
       <div className={`fixed left-0 top-0 h-full bg-white dark:bg-slate-800 shadow-2xl z-40 transition-transform duration-300 ease-in-out ${
         showSettings ? 'translate-x-0' : '-translate-x-full'
@@ -1136,7 +1315,7 @@ export default function Home() {
       )}
 
       <main className={`w-full transition-all duration-300 ${showSettings && !isRunning ? 'lg:ml-80' : ''}`}>
-        <div className="relative p-8">
+        <div className="relative pt-8 px-8 pb-8">
           {/* Audio Enable Prompt */}
           {showAudioPrompt && !audioEnabledRef.current && (
             <div className="fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
@@ -1187,6 +1366,25 @@ export default function Home() {
           )} */}
           {/* Centered Timer Layout */}
           <div className="flex flex-col items-center space-y-6">
+            {/* Synth Wave Visual - Reserved Space */}
+            <div className="w-full max-w-md relative" style={{ minHeight: '80px' }}>
+              {synthWaveActive && (
+                <>
+                  <canvas
+                    ref={synthWaveCanvasRef}
+                    width={400}
+                    height={80}
+                    className="w-full h-20 rounded-lg"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="text-2xl font-mono font-bold text-blue-500 dark:text-blue-400 drop-shadow-lg">
+                      {synthWaveCountdown}s
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            
             {/* Timer Display with Bubbles */}
             <div className="relative w-full max-w-md aspect-square">
               {/* Main Timer (Large) */}
@@ -1275,23 +1473,13 @@ export default function Home() {
                         {timeLeft === 0 && !isRunning && mode === 'work' ? 'Simply Time' : formatTime(timeLeft)}
                       </div>
                     )}
-                    <div className="flex items-center justify-center gap-2 mt-2">
-                      <div className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-                        ⏱️ Focus Time
+                    {synthWaveActive && (
+                      <div className="flex items-center justify-center gap-2 mt-2">
+                        <div className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                          Focus Time
+                        </div>
                       </div>
-                      {!isRunning && !isEditingTime && mode === 'work' && (
-                        <button
-                          onClick={handleEditTimeClick}
-                          className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-all"
-                          title="Edit time"
-                          aria-label="Edit time"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1393,18 +1581,6 @@ export default function Home() {
                       <div className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-wide">
                         ☕ Break Time
                       </div>
-                      {!isRunning && !isEditingTime && mode === 'break' && (
-                        <button
-                          onClick={handleEditTimeClick}
-                          className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-all"
-                          title="Edit time"
-                          aria-label="Edit time"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -1437,36 +1613,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Controls */}
-            <div className={`flex gap-3 w-full max-w-md ${isRunning ? 'justify-center' : ''}`}>
-              {!isRunning ? (
-                <>
-                  <button
-                    onClick={handleStart}
-                    className={`flex-1 py-5 px-8 rounded-xl font-bold text-lg text-white shadow-xl hover:shadow-2xl transition-all transform hover:scale-105 ${
-                      mode === 'work'
-                        ? 'bg-blue-600 hover:bg-blue-700'
-                        : 'bg-green-600 hover:bg-green-700'
-                    }`}
-                  >
-                    Start
-                  </button>
-                  <button
-                    onClick={handleReset}
-                    className="py-5 px-6 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100 transition-all"
-                  >
-                    Reset
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={handleStop}
-                  className="w-full max-w-md py-5 px-8 rounded-xl font-bold text-lg bg-red-400 hover:bg-red-500 text-white shadow-xl hover:shadow-2xl transition-all transform hover:scale-105"
-                >
-                  Stop
-                </button>
-              )}
-            </div>
 
           </div>
         </div>
